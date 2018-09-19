@@ -9,6 +9,8 @@ import numpy as np
 import time
 from datetime import datetime
 
+from camcorder.shell import InteractiveShell
+
 print('CamCorder with OpenCV v {}'.format(cv2.__version__))
 
 NUM_CAMERAS = 2
@@ -42,7 +44,7 @@ class CamCorder:
         for capture in self.captures:
             capture.set(cv2.CAP_PROP_FRAME_WIDTH, width)
             capture.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-            capture.set(cv2.CAP_PROP_FPS, fps)
+            #capture.set(cv2.CAP_PROP_FPS, fps)
 
         assert None not in self.captures
         self.joint_frame = None
@@ -52,11 +54,13 @@ class CamCorder:
         self.recording = False
         self.writer = None
 
+        self.shell = InteractiveShell(self)
         self.loop()
 
     def loop(self):
         self.t_start = time.time()
         while self.capturing:
+            t_loop_start = time.time()
             rvs, frames = zip(*[capture.read() for capture in self.captures])
             if all(rvs) and all([f is not None for f in frames]):
                 # Merge individual frames along specified axis
@@ -86,9 +90,10 @@ class CamCorder:
             else:
                 pass
 
-            # # Timing info
-            # end = time.time()
-            # elapsed = (end-start)*1000
+            # Timing info
+            t_loop_end = time.time()
+            elapsed = (t_loop_end-t_loop_start)*1000
+            print(elapsed, 1000/elapsed)
             # elapsed_write = (end_write - start_write)*1000
             # elapsed_disp = (end_disp - start_disp)*1000
             # print('{} - {:3.0f} ms ({:2.0f} ms write, {:1.0f} ms display), {:2.1f} fps'.format(
@@ -140,5 +145,8 @@ class CamCorder:
         [capture.release() for capture in self.captures]
         cv2.destroyAllWindows()
 
+
+
 if __name__ == '__main__':
-    CamCorder()
+    cam = CamCorder()
+
