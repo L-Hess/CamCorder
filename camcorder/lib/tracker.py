@@ -9,6 +9,8 @@ from camcorder.util.defaults import *
 from camcorder.util.utilities import extract_metadata
 from camcorder.lib.kalman import KalmanFilter
 
+#Hello world
+
 MIN_MOUSE_AREA = 50
 MIN_DIST_TO_NODE = 100
 
