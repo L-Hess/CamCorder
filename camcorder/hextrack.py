@@ -107,6 +107,8 @@ class HexTrack:
                 for tracker in self.trackers:
                     tracker.apply(frame)
                     tracker.annotate()
+                    tracker.calculate_velocity()
+                    tracker.show_velocity()
 
                 frame_idx += 1
                 delta = NODE_FRAME_STEP_SCROLL
@@ -141,6 +143,7 @@ class HexTrack:
                 # Timestamp overlay
                 self.add_overlay(self.disp_frame, (cv2.getTickCount() - self.t_phase) / cv2.getTickFrequency())
 
+            #cv2.imshow('HexTrack', np.rot90(self.disp_frame))
             cv2.imshow('HexTrack', self.disp_frame)
 
             # What annoys a noisy oyster? Denoising noise annoys the noisy oyster!

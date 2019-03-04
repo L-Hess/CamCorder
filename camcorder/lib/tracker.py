@@ -3,13 +3,13 @@ import time
 import math
 import numpy as np
 import logging
+import csv
 from collections import deque
+from matplotlib import pyplot as plt
 
 from camcorder.util.defaults import *
 from camcorder.util.utilities import extract_metadata
 from camcorder.lib.kalman import KalmanFilter
-
-#Hello world
 
 MIN_MOUSE_AREA = 50
 MIN_DIST_TO_NODE = 100
@@ -24,10 +24,12 @@ DRAW_TRAIL = True
 DRAW_KF_TRAIL = True
 KF_REGISTRATION_AGE = 10
 
+DRAW_NODE_MAP = False
+SHOW_VELOCITY_PLOT = True
+
 SEARCH_WINDOW_SIZE = 60
 
 KERNEL_3 = np.ones((3, 3), np.uint8)
-
 
 def centroid(cnt):
     """Centroid of an OpenCV contour"""
@@ -36,11 +38,25 @@ def centroid(cnt):
     cy = int(m['m01'] / m['m00'])
     return cx, cy
 
-
 def distance(x1, y1, x2, y2):
     """Euclidean distance."""
     return math.sqrt((x1 - x2) ** 2 + (y1 - y2) ** 2)
 
+#Simple, crude fix to getting the linearized position
+def lin_pos(x1, y1, x2, y2, x3, y3):
+    if x1 is not None and x2 is not None and y1 is not None and y2 is not None:
+        if x1 == x2: slope = 0
+        else: slope = (y2-y1)/(x2-x1)
+        if slope != 0: x = (slope*(x1+x3)+y3-y1)/(2*slope)
+        else: x = (x1+x3)/2
+        y = slope*(x-x1)+y1
+        x, y = int(x), int(y)
+        return x, y
+
+def velocity(x1, y1, x2, y2):
+    dx, dy = x1-x2, y1-y2
+    dr = np.sqrt(dx**2 + dy**2)
+    return dr
 
 class TrackerResult:
     """Collection of values of interest calculated per tracker update.
@@ -102,6 +118,15 @@ class Tracker:
         self.search_window_size = SEARCH_WINDOW_SIZE
 
         self.log = logging.getLogger('Tracker {}'.format(self.id))
+
+        self.velocity, self.wvs = [], []
+
+        self.node1, self.node2 = None, None
+        self.pos_node1, self.pos_node2 = None, None
+        self.x1, self.y1, self.x2, self.y2 = None, None, None, None
+        self.rel_pos = []
+        self.velocities = []
+        self.positions = []
 
     def make_mask(self, frame, global_threshold=70):
         """Using the current frame, create a threshold based mask to segment out track from
@@ -175,6 +200,19 @@ class Tracker:
                     pass
                 else:
                     cv2.line(self.img, (x1, y1), (x2, y2), color=(50, 50, 255), thickness=1)
+
+    def calculate_velocity(self):
+        if SHOW_VELOCITY_PLOT:
+            self.points = list(self.results)
+            if len(self.points) > 1:
+                point1, point2 = self.points[0], self.points[1]
+                if point1 is None: point1 = (0,0)
+                if point2 is None: point2 = (0,0)
+                point1, point2 = np.asarray(point1, dtype = 'int'), np.asarray(point2, dtype = 'int')
+                pointx1, pointy1, pointx2, pointy2 = point1[0], point1[1], point2[0], point2[1]
+                dr = int(velocity(pointx1, pointy1, pointx2, pointy2))
+                self.velocity.append(dr)
+                #self.wvs = self.velocity[len(self.velocity)-21:len(self.velocity)-1]
 
     def apply(self, frame):
         """Apply a frame to the current state of the tracker. Will apply the mask, find a large enough
@@ -275,12 +313,60 @@ class Tracker:
                 self.kf.correct(cx, cy)
                 self.kf_age = 0
 
+                self.positions.append((cx,cy))
+                np.savetxt("positions.csv",self.positions, delimiter = ",")
+
                 # Find closest node
                 for node_id, node in self.nodes.items():
                     dist = distance(cx, cy, node['x'], node['y'])
                     if dist < closest_distance and dist < MIN_DIST_TO_NODE:
                         closest_distance = dist
                         self.active_node = node_id
+
+                # Find closest two nodes
+                nodes_dist = np.array([])
+                nodes_list = np.array([])
+                for node_id, node in self.nodes.items():
+                    dist = distance(cx, cy, node['x'], node['y'])
+                    nodes_dist = np.append(nodes_dist, dist)
+                    nodes_list = np.append(nodes_list, node_id)
+                self.dist1, self.node1  = np.min(nodes_dist), nodes_list[np.argmin(nodes_dist)]
+                nodes_dist[np.argmin(nodes_dist)] = 1e12
+                self.dist2, self.node2 = np.min(nodes_dist), nodes_list[np.argmin(nodes_dist)]
+
+                # Find (x,y) coordinates two closest nodes
+                for node_id, node in self.nodes.items():
+                    if node_id == self.node1:
+                        self.x1, self.y1 = node['x'],node['y']
+                    if node_id == self.node2:
+                        self.x2, self.y2 = node['x'],node['y']
+
+                self.x, self.y = lin_pos(self.x1, self.y1, self.x2, self.y2, cx, cy)
+
+                if self.node1 > self.node2:
+                    self.xx, self.yy = self.x1, self.y1
+                if self.node2 > self.node1:
+                    self.xx, self.yy = self.x2, self.y2
+
+                self.dd, self.d = distance(self.x, self.y, self.xx, self.yy), distance(self.x2, self.y2, self.x1, self.y1)
+                self.rr = self.dd/self.d
+                if self.rr > 1:
+                    self.rr = 1
+                self.rel_pos.append(self.rr)
+                if len(self.rel_pos)>2:
+                    if self.rel_pos[len(self.rel_pos)-1]-self.rel_pos[len(self.rel_pos)-2] > 0.5:
+                        self.dr = 1-self.rel_pos[len(self.rel_pos)-1] + self.rel_pos[len(self.rel_pos)-2]
+                    elif self.rel_pos[len(self.rel_pos)-1]-self.rel_pos[len(self.rel_pos)-2] < -0.5:
+                        self.dr = 1 - self.rel_pos[len(self.rel_pos) - 2] + self.rel_pos[len(self.rel_pos) - 1]
+                    else:
+                        self.dr = abs(self.rel_pos[len(self.rel_pos)-1]-self.rel_pos[len(self.rel_pos)-2])
+                    self.dr = int(self.dr*100)
+                    self.velocities.append(self.dr)
+                    self.wvs = self.velocities[len(self.velocities) - 21:len(self.velocities) - 1]
+                    np.savetxt("velocities.csv", self.velocities)
+
+                cv2.circle(self.img, (self.x, self.y), radius = 10, color = (255,0,0))
+                cv2.line(self.img, (self.x1, self.y1), (self.x2, self.y2), color=(255, 0, 0), thickness=2)
 
             if self.last_node != self.active_node and self.active_node is not None:
                 self.last_node = self.active_node
@@ -313,3 +399,11 @@ class Tracker:
 
             elapsed = (cv2.getTickCount() - t0) / cv2.getTickFrequency() * 1000
             self._track_times.appendleft(elapsed)
+
+    def show_velocity(self):
+        if SHOW_VELOCITY_PLOT:
+            vplot = np.zeros([600, 405, 3])
+            for n, velocity in enumerate(self.wvs,0):
+                cv2.rectangle(vplot, (20+n*20, 599), (5+n*20, 599-velocity*10), color =([0,255,0]), thickness = cv2.FILLED)
+            cv2.imshow('Velocity plot', vplot)
+
